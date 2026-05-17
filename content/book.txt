@@ -1,0 +1,47 @@
+# Kindle Reader
+
+La sala estaba en silencio, pero no era un silencio vacio. Tenia el ruido leve de una casa que ya ha terminado el dia: una tuberia que se contrae, una madera que cruje, el aire que se mueve despacio entre las cortinas. Elena dejo la taza al borde de la mesa y abrio el lector como quien abre una ventana discreta.
+
+El texto aparecio sin prisa. No habia colores, ni animaciones, ni nada que pidiera atencion fuera de la frase siguiente. Eso era precisamente lo que buscaba: una pagina limpia, con margenes generosos y una linea de progreso que no gritara. En la parte inferior bastaba una marca fina para saber donde estaba.
+
+Al tocar la derecha, la pagina cambiaba entera. No se deslizaba como una pantalla de telefono, no intentaba imitar papel con trucos visuales. Simplemente dejaba paso a la siguiente seccion de lectura. Ese gesto breve, casi invisible, era suficiente para mantener el ritmo sin sacar la mano del marco de la Kindle.
+
+La aplicacion hacia el trabajo pesado en el servidor. Cortaba el texto, calculaba la pagina actual, preparaba los enlaces anterior y siguiente, y devolvia HTML ya listo. En el dispositivo quedaba muy poco por hacer: pintar letras, seguir enlaces y escuchar unas pocas teclas o toques. La idea era simple y por eso funcionaba bien.
+
+Elena habia probado lectores mas ambiciosos. Algunos cargaban menus enormes, otros transformaban cada pagina en una pequena aplicacion con estado, gestos y sincronizacion constante. En una pantalla de tinta electronica aquello se sentia torpe. La tinta agradece la calma; cuanto menos cambia la pantalla, mejor responde la lectura.
+
+Aquella noche queria comprobar algo concreto. Habia pegado un texto largo de prueba para ver si el indicador inferior avanzaba de manera natural. Primera pagina, segunda pagina, tercera pagina. El numero no tenia que ser protagonista. Tenia que estar ahi como una referencia amable, igual que el pliegue de una esquina en un libro usado.
+
+En el margen derecho dejo el dedo apoyado un instante. La siguiente pagina entro sin que el navegador tuviera que reinterpretar el documento entero con una maquinaria pesada. Cada URL contenia la pagina que pedia. Si algo fallaba, siempre podia recargar. Si queria compartir un punto concreto, bastaba con copiar el enlace de esa pagina.
+
+La decision de usar rutas sencillas tenia otra ventaja. Vercel podia servir la aplicacion como una funcion normal, con una compilacion clara y un arranque facil de depurar. No habia una cola de dependencias raras ni un cliente que tuviera que reconstruir la experiencia completa antes de poder leer la primera linea.
+
+La tipografia tambien importaba. El texto necesitaba aire entre lineas, parrafos con una entrada suave y un ancho que no obligara al ojo a viajar demasiado lejos. Una Kindle Scribe tiene espacio de sobra, pero no conviene llenar cada milimetro. Leer es seguir una columna estable, no perseguir frases de borde a borde.
+
+Cuando el contenido real llegara, el archivo de texto seria suficiente. Un capitulo, un articulo largo, una nota exportada o un borrador de trabajo podian vivir ahi dentro. El servidor lo leeria durante la compilacion y lo cortaria en paginas pequeñas. Para una version futura, la fuente podria venir de una base de datos o de un panel de subida.
+
+Elena sonrio al pensar en el stylus. Seria tentador convertir el lector en un cuaderno: subrayados, circulos, notas al margen. Pero el navegador de un lector de tinta no siempre entrega al sitio web todas las capacidades del lapiz. A veces lo trata como un toque. A veces lo trata como un puntero. A veces no ofrece presion, borrador ni rechazo de palma.
+
+Por eso la primera version debia ser modesta. Si el stylus se presentaba como evento de puntero, serviria para pasar pagina tocando la derecha. Si mas adelante el navegador permitia capturar trazos, se podria anadir una capa de anotaciones. Esa capa tendria que guardar coordenadas por pagina y respetar que la pantalla no esta pensada para redibujar rapido.
+
+La pagina siguio avanzando. En la parte superior quedaba el titulo, centrado y discreto. A un lado, un enlace para volver al inicio; al otro, flechas pequeñas para los dias en que el toque lateral no fuera comodo. Nada de eso competia con el contenido. Era infraestructura, no decoracion.
+
+La diferencia entre una interfaz buena y una interfaz pesada se nota al cabo de diez minutos. La pesada obliga a pensar en ella. La buena desaparece y deja que el lector mida el tiempo por escenas, argumentos o ideas. En un dispositivo como la Scribe, esa desaparicion es el objetivo principal.
+
+Tambien importaba que el sistema fuera predecible. La mitad derecha avanzaba, la mitad izquierda retrocedia. La barra inferior mostraba el porcentaje de lectura. La URL conservaba la pagina. Las teclas de flecha, si el navegador las enviaba, hacian lo mismo que el toque. No habia gestos secretos que recordar.
+
+Despues de unas cuantas paginas, Elena empezo a leer el texto como si no fuera una prueba. Esa es una senal util en cualquier prototipo: cuando deja de sentirse como herramienta y empieza a servir al habito. Aun quedaban decisiones pendientes, pero la base ya tenia la forma correcta.
+
+Para documentos largos, el siguiente paso podria ser un indice calculado en servidor. Cada encabezado del texto podria convertirse en una entrada navegable, y cada entrada apuntaria a la primera pagina que contiene ese bloque. No hace falta cargar un visor completo para eso. Basta con procesar el texto y devolver enlaces normales.
+
+Otra mejora seria guardar la ultima pagina leida. Se podria hacer en una cookie pequeña o en una ruta de servidor asociada a un usuario. Si el objetivo es mantener el cliente ligero, el navegador no deberia cargar un sistema de estado complejo. El servidor puede recordar lo necesario y enviar la pagina ya preparada.
+
+El diseno se mantuvo sobrio por una razon practica. Las pantallas de tinta electronica no premian sombras, transparencias ni movimientos delicados. Premian contraste, jerarquia clara y cambios de estado simples. Una linea negra, un margen medido y un texto bien compuesto valen mas que una interfaz vistosa.
+
+La prueba final fue cerrar el navegador y volver a abrirlo. La pagina de inicio cargaba rapido. El indicador inferior respondia. El toque derecho no exigia punteria. La lectura no dependia de un paquete enorme de JavaScript para funcionar. Todo eso reducia el riesgo en el entorno mas importante: el dispositivo real.
+
+Elena apago la luz de la mesa, pero dejo la Kindle encendida. En la pantalla quedo una pagina quieta, lista para el siguiente toque. No parecia una aplicacion nueva ni un experimento tecnico. Parecia una superficie de lectura. Y para esa noche, eso era exactamente lo que hacia falta.
+
+Esta ultima parte existe solo para que el ejemplo tenga mas recorrido. Si estas probando el lector en la Kindle Scribe, toca repetidamente el lado derecho y observa como cambia el contador inferior. Despues toca el lado izquierdo para volver. La experiencia deberia sentirse directa, sin esperas largas ni elementos que estorben al texto.
+
+Cuando sustituyas este archivo por contenido real, conserva la primera linea con almohadilla si quieres definir el titulo. El resto puede ser texto plano separado por parrafos. La aplicacion se encarga de normalizar saltos de linea, dividir bloques grandes y construir paginas que el navegador pueda mostrar con muy poco trabajo.

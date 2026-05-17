@@ -1,0 +1,11 @@
+node_modules
+dist
+.output
+.vercel
+.vinxi
+.solid
+.solid-start
+.nitro
+.env
+.env.*
+!.env.example
