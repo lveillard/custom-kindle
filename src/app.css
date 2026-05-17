@@ -316,9 +316,9 @@ a {
 .selection-handle {
   position: absolute;
   z-index: 70;
-  width: 42px;
-  height: 54px;
-  margin-left: -21px;
+  width: 44px;
+  height: 58px;
+  margin-left: -22px;
   margin-top: 0;
   pointer-events: auto;
   touch-action: none;
@@ -326,33 +326,49 @@ a {
   cursor: grab;
 }
 
+.selection-handle-start {
+  -webkit-transform: rotate(-11deg);
+  transform: rotate(-11deg);
+  -webkit-transform-origin: top center;
+  transform-origin: top center;
+}
+
+.selection-handle-end {
+  -webkit-transform: rotate(11deg);
+  transform: rotate(11deg);
+  -webkit-transform-origin: top center;
+  transform-origin: top center;
+}
+
 .selection-handle::before {
   position: absolute;
-  left: 16px;
+  left: 17px;
   top: 0;
   width: 0;
   height: 0;
   border-right: 5px solid transparent;
-  border-bottom: 12px solid rgba(181, 190, 244, 0.76);
+  border-bottom: 13px solid #7788bb;
   border-left: 5px solid transparent;
   content: "";
 }
 
 .selection-handle::after {
   position: absolute;
-  left: 7px;
-  top: 10px;
+  left: 8px;
+  top: 11px;
+  -webkit-box-sizing: border-box;
   box-sizing: border-box;
   width: 28px;
   height: 28px;
-  border: 1px solid rgba(91, 100, 145, 0.38);
+  border: 2px solid #5566aa;
+  -webkit-border-radius: 999px;
   border-radius: 999px;
-  background: rgba(196, 204, 248, 0.68);
+  background: #aabbee;
   content: "";
 }
 
 .selection-handle:active::after {
-  background: rgba(177, 187, 242, 0.82);
+  background: #7788bb;
 }
 
 .note-panel {
