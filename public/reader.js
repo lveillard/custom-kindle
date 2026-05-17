@@ -24,9 +24,10 @@
   var popover = document.getElementById("selection-popover");
   var selectionText = document.getElementById("selection-text");
   var selectionTranslation = document.getElementById("selection-translation");
+  var selectionClose = document.getElementById("selection-close");
   var notesToggle = document.getElementById("notes-toggle");
   var notePanel = document.getElementById("note-panel");
-  var noteCanvas = document.getElementById("note-canvas");
+  var noteCanvases = Array.prototype.slice.call(document.querySelectorAll("[data-note-canvas]"));
   var noteClear = document.getElementById("note-clear");
   var noteClose = document.getElementById("note-close");
   var noteStatus = document.getElementById("note-status");
@@ -35,6 +36,10 @@
   if (!shell || !main || !viewport || !flow) {
     return;
   }
+
+  var LONG_PRESS_MS = 430;
+  var LONG_PRESS_MOVE_PX = 16;
+  var SELECTION_CLICK_SUPPRESS_MS = 850;
 
   var state = {
     page: getInitialPage(),
@@ -47,20 +52,57 @@
     pressPoint: null,
     suppressClickUntil: 0,
     wordHighlight: null,
+    selectionStartRange: null,
+    selectionEndRange: null,
+    selectionDrag: "",
+    selectionHistoryGuard: false,
     notesOpen: false
   };
 
-  var notes = {
-    drawing: false,
-    strokes: [],
-    currentStroke: null,
-    context: null,
-    activePointerId: null,
-    redrawFrame: 0,
-    dpr: 1,
-    width: 0,
-    height: 0
+  var NOTE_CONFIGS = {
+    fast: {
+      minWidth: 1.45,
+      maxWidth: 3.8,
+      pressureScale: 3.65,
+      minDistance: 0.75,
+      interpolationStep: 5,
+      maxInterpolationSteps: 8,
+      maxDpr: 1,
+      desynchronized: true
+    },
+    fine: {
+      minWidth: 1.15,
+      maxWidth: 3.1,
+      pressureScale: 3.05,
+      minDistance: 0.65,
+      interpolationStep: 4,
+      maxInterpolationSteps: 10,
+      maxDpr: 1.5,
+      desynchronized: true
+    },
+    sharp: {
+      minWidth: 1,
+      maxWidth: 2.8,
+      pressureScale: 2.8,
+      minDistance: 0.55,
+      interpolationStep: 3.5,
+      maxInterpolationSteps: 12,
+      maxDpr: 2,
+      desynchronized: false
+    },
+    soft: {
+      minWidth: 1.3,
+      maxWidth: 3.4,
+      pressureScale: 3.25,
+      minDistance: 0.9,
+      interpolationStep: 6,
+      maxInterpolationSteps: 7,
+      maxDpr: 1,
+      desynchronized: true
+    }
   };
+
+  var noteSurfaces = createNoteSurfaces();
 
   function getInitialPage() {
     var fromUrl = getPageFromUrl();
@@ -109,7 +151,7 @@
     setPage(state.page, false);
 
     if (state.notesOpen) {
-      resizeNoteCanvas();
+      resizeNoteCanvases();
     }
   }
 
@@ -120,7 +162,7 @@
     clearSelectionState();
 
     if (state.notesOpen) {
-      loadStrokes();
+      loadAllStrokes();
     }
 
     if (syncUrl && window.history && window.history.replaceState) {
@@ -284,7 +326,7 @@
     }
 
     if (selectionText) {
-      selectionText.textContent = text.length > 76 ? text.slice(0, 73) + "..." : text;
+      selectionText.textContent = text.length > 120 ? text.slice(0, 117) + "..." : text;
     }
 
     if (selectionTranslation) {
@@ -292,19 +334,16 @@
     }
 
     renderWordUnderline(range);
-    popover.hidden = false;
 
-    var popWidth = popover.offsetWidth || 260;
-    var popHeight = popover.offsetHeight || 80;
-    var left = clamp(rect.left + rect.width / 2 - popWidth / 2, 12, window.innerWidth - popWidth - 12);
-    var top = rect.top - popHeight - 10;
+    var selectionMiddle = rect.top + rect.height / 2;
+    var dockBottom = selectionMiddle < window.innerHeight / 2;
 
-    if (top < 58) {
-      top = rect.bottom + 10;
+    if (popover.classList) {
+      popover.classList.toggle("is-docked-bottom", dockBottom);
+      popover.classList.toggle("is-docked-top", !dockBottom);
     }
 
-    popover.style.left = left + "px";
-    popover.style.top = top + "px";
+    popover.hidden = false;
   }
 
   function hideSelectionPopover() {
@@ -319,9 +358,54 @@
     hideSelectionPopover();
     clearWordUnderline();
     state.wordHighlight = null;
+    state.selectionStartRange = null;
+    state.selectionEndRange = null;
+    state.selectionDrag = "";
+    releaseSelectionHistoryGuard();
 
     if (selection && selection.removeAllRanges) {
       selection.removeAllRanges();
+    }
+  }
+
+  function ensureSelectionHistoryGuard() {
+    if (state.selectionHistoryGuard || !window.history || !window.history.pushState) {
+      return;
+    }
+
+    try {
+      window.history.pushState({ kindleSelectionGuard: true }, "", window.location.href);
+      state.selectionHistoryGuard = true;
+    } catch (error) {
+      state.selectionHistoryGuard = false;
+    }
+  }
+
+  function releaseSelectionHistoryGuard() {
+    if (!state.selectionHistoryGuard || !window.history || !window.history.replaceState) {
+      state.selectionHistoryGuard = false;
+      return;
+    }
+
+    try {
+      window.history.replaceState({ kindleReader: true, page: state.page }, "", window.location.href);
+    } catch (error) {
+      // Browser history can be locked down; selection still works without the guard.
+    }
+
+    state.selectionHistoryGuard = false;
+  }
+
+  function restoreSelectionHistoryGuard() {
+    if (!window.history || !window.history.pushState) {
+      return;
+    }
+
+    try {
+      window.history.pushState({ kindleSelectionGuard: true }, "", window.location.href);
+      state.selectionHistoryGuard = true;
+    } catch (error) {
+      state.selectionHistoryGuard = false;
     }
   }
 
@@ -347,6 +431,8 @@
     var layer = getHighlightLayer();
     var rects = range.getClientRects();
     var i;
+    var firstRect = null;
+    var lastRect = null;
 
     layer.innerHTML = "";
 
@@ -355,6 +441,12 @@
         continue;
       }
 
+      if (!firstRect) {
+        firstRect = rects[i];
+      }
+
+      lastRect = rects[i];
+
       var line = document.createElement("span");
       line.className = "word-highlight-line";
       line.style.left = rects[i].left + "px";
@@ -362,6 +454,22 @@
       line.style.width = rects[i].width + "px";
       layer.appendChild(line);
     }
+
+    if (firstRect && lastRect) {
+      layer.appendChild(createSelectionHandle("start", firstRect.left, firstRect.bottom));
+      layer.appendChild(createSelectionHandle("end", lastRect.right, lastRect.bottom));
+    }
+  }
+
+  function createSelectionHandle(type, x, y) {
+    var handle = document.createElement("span");
+
+    handle.className = "selection-handle selection-handle-" + type;
+    handle.setAttribute("data-handle", type);
+    handle.style.left = x + "px";
+    handle.style.top = y + "px";
+
+    return handle;
   }
 
   function getRangeFromPoint(x, y) {
@@ -437,28 +545,84 @@
     return range;
   }
 
-  function selectWordAt(x, y) {
-    var range = expandRangeToWord(getRangeFromPoint(x, y));
-    var selection;
+  function compareRangeStarts(first, second) {
+    try {
+      return first.compareBoundaryPoints(Range.START_TO_START, second);
+    } catch (error) {
+      return 0;
+    }
+  }
+
+  function buildSelectionRange() {
+    var range;
+
+    if (!state.selectionStartRange || !state.selectionEndRange) {
+      return null;
+    }
+
+    range = document.createRange();
+
+    if (compareRangeStarts(state.selectionStartRange, state.selectionEndRange) <= 0) {
+      range.setStart(state.selectionStartRange.startContainer, state.selectionStartRange.startOffset);
+      range.setEnd(state.selectionEndRange.endContainer, state.selectionEndRange.endOffset);
+    } else {
+      range.setStart(state.selectionEndRange.startContainer, state.selectionEndRange.startOffset);
+      range.setEnd(state.selectionStartRange.endContainer, state.selectionStartRange.endOffset);
+    }
+
+    return range;
+  }
+
+  function applySelectionRange(range) {
+    var selection = window.getSelection ? window.getSelection() : null;
     var text;
 
-    if (!range) {
+    if (!selection || !range) {
       return false;
     }
 
-    selection = window.getSelection ? window.getSelection() : null;
     text = range.toString().replace(/\s+/g, " ").trim();
 
-    if (!selection || !text) {
+    if (!text) {
       return false;
     }
 
     selection.removeAllRanges();
     selection.addRange(range);
     state.wordHighlight = range.cloneRange();
+    ensureSelectionHistoryGuard();
     showPopoverForRange(range, text);
 
     return true;
+  }
+
+  function selectWordAt(x, y) {
+    var range = expandRangeToWord(getRangeFromPoint(x, y));
+
+    if (!range) {
+      return false;
+    }
+
+    state.selectionStartRange = range.cloneRange();
+    state.selectionEndRange = range.cloneRange();
+
+    return applySelectionRange(buildSelectionRange());
+  }
+
+  function updateSelectionEndpoint(type, x, y) {
+    var wordRange = expandRangeToWord(getRangeFromPoint(x, y));
+
+    if (!wordRange) {
+      return false;
+    }
+
+    if (type === "start") {
+      state.selectionStartRange = wordRange.cloneRange();
+    } else {
+      state.selectionEndRange = wordRange.cloneRange();
+    }
+
+    return applySelectionRange(buildSelectionRange());
   }
 
   function getEventPoint(event) {
@@ -474,6 +638,7 @@
     window.clearTimeout(state.longPressTimer);
     state.longPressTimer = 0;
     state.pressPoint = null;
+    state.selectionDrag = "";
   }
 
   function startLongPress(event) {
@@ -492,18 +657,26 @@
     window.clearTimeout(state.longPressTimer);
     state.longPressTimer = window.setTimeout(function () {
       state.longPressTimer = 0;
-      state.suppressClickUntil = Date.now() + 750;
+      state.suppressClickUntil = Date.now() + SELECTION_CLICK_SUPPRESS_MS;
 
-      if (!selectWordAt(point.x, point.y)) {
+      if (selectWordAt(point.x, point.y)) {
+        state.selectionDrag = "end";
+      } else {
         state.suppressClickUntil = 0;
       }
-    }, 560);
+    }, LONG_PRESS_MS);
   }
 
   function moveLongPress(event) {
     var point;
     var dx;
     var dy;
+
+    if (state.selectionDrag) {
+      point = getEventPoint(event);
+      updateSelectionEndpoint(state.selectionDrag, point.x, point.y);
+      return;
+    }
 
     if (!state.pressPoint) {
       return;
@@ -513,8 +686,52 @@
     dx = point.x - state.pressPoint.x;
     dy = point.y - state.pressPoint.y;
 
-    if (Math.sqrt(dx * dx + dy * dy) > 9) {
+    if (Math.sqrt(dx * dx + dy * dy) > LONG_PRESS_MOVE_PX) {
       cancelLongPress();
+    }
+  }
+
+  function startSelectionDrag(event) {
+    var target = event.target;
+    var handleType = target && target.getAttribute ? target.getAttribute("data-handle") : "";
+
+    if (!handleType) {
+      return false;
+    }
+
+    if (event.cancelable) {
+      event.preventDefault();
+    }
+
+    state.selectionDrag = handleType;
+    state.suppressClickUntil = Date.now() + SELECTION_CLICK_SUPPRESS_MS;
+    ensureSelectionHistoryGuard();
+
+    return true;
+  }
+
+  function moveSelectionDrag(event) {
+    var point;
+
+    if (!state.selectionDrag) {
+      return;
+    }
+
+    if (event.cancelable) {
+      event.preventDefault();
+    }
+
+    point = getEventPoint(event);
+    updateSelectionEndpoint(state.selectionDrag, point.x, point.y);
+  }
+
+  function stopSelectionDrag() {
+    state.selectionDrag = "";
+  }
+
+  function preventSelectionNativeGesture(event) {
+    if ((state.selectionDrag || state.wordHighlight) && event.cancelable) {
+      event.preventDefault();
     }
   }
 
@@ -549,8 +766,47 @@
     return "EN - traduccion de prueba";
   }
 
+  function createNoteSurfaces() {
+    var surfaces = [];
+    var i;
+    var canvas;
+    var id;
+
+    for (i = 0; i < noteCanvases.length; i += 1) {
+      canvas = noteCanvases[i];
+      id = canvas.getAttribute("data-note-canvas") || "surface-" + i;
+
+      surfaces.push({
+        id: id,
+        canvas: canvas,
+        config: NOTE_CONFIGS[id] || NOTE_CONFIGS.fast,
+        drawing: false,
+        strokes: [],
+        currentStroke: null,
+        context: null,
+        activePointerId: null,
+        rawPointerSeen: false,
+        renderedCurveIndex: 0,
+        renderedPointCount: 0,
+        dpr: 1,
+        width: 0,
+        height: 0
+      });
+    }
+
+    return surfaces;
+  }
+
+  function forEachNoteSurface(callback) {
+    var i;
+
+    for (i = 0; i < noteSurfaces.length; i += 1) {
+      callback(noteSurfaces[i]);
+    }
+  }
+
   function openNotes() {
-    if (!notePanel || !noteCanvas) {
+    if (!notePanel || noteSurfaces.length < 1) {
       return;
     }
 
@@ -564,11 +820,12 @@
       }
     }
 
-    resizeNoteCanvas();
-    loadStrokes();
+    resizeNoteCanvases();
+    loadAllStrokes();
   }
 
   function closeNotes() {
+    endAllStrokes();
     state.notesOpen = false;
 
     if (notePanel) {
@@ -583,89 +840,174 @@
     }
   }
 
-  function storageKey() {
-    return "kindle-reader-note-v1-page-" + state.page;
+  function storageKey(surface) {
+    return "kindle-reader-note-v2-" + surface.id + "-page-" + state.page;
   }
 
-  function resizeNoteCanvas() {
-    if (!noteCanvas) {
-      return;
+  function getSurfaceDpr(surface) {
+    var deviceDpr = window.devicePixelRatio || 1;
+    var maxDpr = surface.config.maxDpr || 1;
+
+    if (maxDpr <= 1) {
+      return 1;
     }
 
-    var rect = noteCanvas.getBoundingClientRect();
+    return Math.min(maxDpr, Math.max(1, deviceDpr));
+  }
+
+  function getNoteContext(surface) {
+    var context = null;
+
+    try {
+      context = surface.canvas.getContext("2d", { alpha: false, desynchronized: !!surface.config.desynchronized });
+    } catch (error) {
+      context = null;
+    }
+
+    return context || surface.canvas.getContext("2d");
+  }
+
+  function resizeNoteCanvases() {
+    forEachNoteSurface(resizeNoteCanvas);
+  }
+
+  function resizeNoteCanvas(surface) {
+    var rect = surface.canvas.getBoundingClientRect();
 
     if (rect.width < 1 || rect.height < 1) {
       return;
     }
 
-    notes.dpr = Math.min(2, window.devicePixelRatio || 1);
-    notes.width = rect.width;
-    notes.height = rect.height;
-    noteCanvas.width = Math.round(rect.width * notes.dpr);
-    noteCanvas.height = Math.round(rect.height * notes.dpr);
-    notes.context = noteCanvas.getContext("2d");
-    notes.context.setTransform(notes.dpr, 0, 0, notes.dpr, 0, 0);
-    redrawStrokes();
+    surface.dpr = getSurfaceDpr(surface);
+    surface.width = rect.width;
+    surface.height = rect.height;
+    surface.canvas.width = Math.round(rect.width * surface.dpr);
+    surface.canvas.height = Math.round(rect.height * surface.dpr);
+    surface.context = getNoteContext(surface);
+    surface.context.setTransform(surface.dpr, 0, 0, surface.dpr, 0, 0);
+    surface.context.imageSmoothingEnabled = false;
+    redrawStrokes(surface);
   }
 
-  function loadStrokes() {
-    if (!window.localStorage) {
-      notes.strokes = [];
-      redrawStrokes();
-      return;
-    }
-
-    try {
-      notes.strokes = JSON.parse(window.localStorage.getItem(storageKey()) || "[]");
-    } catch (error) {
-      notes.strokes = [];
-    }
-
-    redrawStrokes();
-  }
-
-  function saveStrokes() {
-    if (!window.localStorage) {
-      return;
-    }
-
-    try {
-      window.localStorage.setItem(storageKey(), JSON.stringify(notes.strokes));
-    } catch (error) {
-      return;
-    }
-  }
-
-  function redrawStrokes() {
-    var context = notes.context;
-    var i;
-
-    notes.redrawFrame = 0;
+  function fillNoteBackground(surface) {
+    var context = surface.context;
 
     if (!context) {
       return;
     }
 
-    context.clearRect(0, 0, notes.width, notes.height);
-
-    for (i = 0; i < notes.strokes.length; i += 1) {
-      drawStroke(notes.strokes[i]);
-    }
+    context.save();
+    context.setTransform(surface.dpr, 0, 0, surface.dpr, 0, 0);
+    context.fillStyle = "#fff";
+    context.fillRect(0, 0, surface.width, surface.height);
+    context.restore();
   }
 
-  function requestNotesRedraw() {
-    if (notes.redrawFrame) {
+  function loadAllStrokes() {
+    forEachNoteSurface(loadStrokes);
+  }
+
+  function loadStrokes(surface) {
+    if (!window.localStorage) {
+      surface.strokes = [];
+      redrawStrokes(surface);
       return;
     }
 
-    if (window.requestAnimationFrame) {
-      notes.redrawFrame = window.requestAnimationFrame(redrawStrokes);
-    } else {
-      notes.redrawFrame = window.setTimeout(redrawStrokes, 16);
+    try {
+      surface.strokes = JSON.parse(window.localStorage.getItem(storageKey(surface)) || "[]");
+    } catch (error) {
+      surface.strokes = [];
+    }
+
+    redrawStrokes(surface);
+  }
+
+  function saveStrokes(surface) {
+    if (!window.localStorage) {
+      return;
+    }
+
+    try {
+      window.localStorage.setItem(storageKey(surface), JSON.stringify(surface.strokes));
+    } catch (error) {
+      return;
     }
   }
 
-  function drawStroke(stroke) {
+  function redrawStrokes(surface) {
+    var i;
+
+    if (!surface.context) {
+      return;
+    }
+
+    fillNoteBackground(surface);
+
+    for (i = 0; i < surface.strokes.length; i += 1) {
+      drawStroke(surface, surface.strokes[i]);
+    }
+  }
+
+  function resetActiveStrokeRendering(surface) {
+    surface.renderedCurveIndex = 0;
+    surface.renderedPointCount = 0;
+  }
+
+  function drawActiveStrokeIncrementally(surface) {
+    var stroke = surface.currentStroke;
+    var length = stroke ? stroke.length : 0;
+    var start;
+    var i;
+
+    if (!surface.context || !stroke || length < 1) {
+      return;
+    }
+
+    if (surface.renderedPointCount < 1) {
+      drawDot(surface, stroke[0]);
+      surface.renderedPointCount = 1;
+    }
+
+    if (length === 2 && surface.renderedPointCount < 2) {
+      drawSegment(surface, stroke[0], stroke[1]);
+      surface.renderedPointCount = 2;
+      return;
+    }
+
+    if (length < 3) {
+      return;
+    }
+
+    start = Math.max(1, surface.renderedCurveIndex + 1);
+
+    for (i = start; i <= length - 2; i += 1) {
+      drawCurveSegment(surface, midpointBetween(stroke[i - 1], stroke[i]), stroke[i], midpointBetween(stroke[i], stroke[i + 1]));
+      surface.renderedCurveIndex = i;
+    }
+
+    surface.renderedPointCount = length;
+  }
+
+  function finishActiveStroke(surface) {
+    var stroke = surface.currentStroke;
+    var length = stroke ? stroke.length : 0;
+
+    if (!stroke || length < 2) {
+      return;
+    }
+
+    if (length === 2 && surface.renderedPointCount < 2) {
+      drawSegment(surface, stroke[0], stroke[1]);
+      return;
+    }
+
+    if (length > 2) {
+      drawSegment(surface, midpointBetween(stroke[length - 2], stroke[length - 1]), stroke[length - 1]);
+    }
+  }
+
+  function drawStroke(surface, stroke) {
     var i;
     var current;
     var next;
@@ -677,12 +1019,12 @@
     }
 
     if (stroke.length === 1) {
-      drawDot(stroke[0]);
+      drawDot(surface, stroke[0]);
       return;
     }
 
     if (stroke.length === 2) {
-      drawSegment(stroke[0], stroke[1]);
+      drawSegment(surface, stroke[0], stroke[1]);
       return;
     }
 
@@ -692,11 +1034,11 @@
       current = stroke[i];
       next = stroke[i + 1];
       midpoint = midpointBetween(current, next);
-      drawCurveSegment(previousMidpoint, current, midpoint);
+      drawCurveSegment(surface, previousMidpoint, current, midpoint);
       previousMidpoint = midpoint;
     }
 
-    drawSegment(previousMidpoint, stroke[stroke.length - 1]);
+    drawSegment(surface, previousMidpoint, stroke[stroke.length - 1]);
   }
 
   function midpointBetween(from, to) {
@@ -707,12 +1049,14 @@
     };
   }
 
-  function strokeWidth(point) {
-    return Math.max(1.6, Math.min(4.2, (point.p || 0.5) * 4.2));
+  function strokeWidth(surface, point) {
+    var config = surface.config;
+
+    return Math.max(config.minWidth, Math.min(config.maxWidth, (point.p || 0.5) * config.pressureScale));
   }
 
-  function drawDot(point) {
-    var context = notes.context;
+  function drawDot(surface, point) {
+    var context = surface.context;
 
     if (!context) {
       return;
@@ -720,12 +1064,12 @@
 
     context.fillStyle = "#111";
     context.beginPath();
-    context.arc(point.x, point.y, strokeWidth(point) / 2, 0, Math.PI * 2);
+    context.arc(point.x, point.y, strokeWidth(surface, point) / 2, 0, Math.PI * 2);
     context.fill();
   }
 
-  function drawCurveSegment(from, control, to) {
-    var context = notes.context;
+  function drawCurveSegment(surface, from, control, to) {
+    var context = surface.context;
 
     if (!context) {
       return;
@@ -734,15 +1078,15 @@
     context.lineCap = "round";
     context.lineJoin = "round";
     context.strokeStyle = "#111";
-    context.lineWidth = strokeWidth(control);
+    context.lineWidth = strokeWidth(surface, control);
     context.beginPath();
     context.moveTo(from.x, from.y);
     context.quadraticCurveTo(control.x, control.y, to.x, to.y);
     context.stroke();
   }
 
-  function drawSegment(from, to) {
-    var context = notes.context;
+  function drawSegment(surface, from, to) {
+    var context = surface.context;
 
     if (!context) {
       return;
@@ -751,7 +1095,7 @@
     context.lineCap = "round";
     context.lineJoin = "round";
     context.strokeStyle = "#111";
-    context.lineWidth = strokeWidth(to);
+    context.lineWidth = strokeWidth(surface, to);
     context.beginPath();
     context.moveTo(from.x, from.y);
     context.lineTo(to.x, to.y);
@@ -765,8 +1109,9 @@
     return Math.sqrt(dx * dx + dy * dy);
   }
 
-  function appendStrokePoint(point) {
-    var stroke = notes.currentStroke;
+  function appendStrokePoint(surface, point) {
+    var stroke = surface.currentStroke;
+    var config = surface.config;
     var last;
     var distance;
     var steps;
@@ -784,12 +1129,12 @@
     last = stroke[stroke.length - 1];
     distance = distanceBetween(last, point);
 
-    if (distance < 0.75) {
+    if (distance < config.minDistance) {
       return;
     }
 
-    if (distance > 7) {
-      steps = Math.min(8, Math.floor(distance / 5));
+    if (distance > config.interpolationStep) {
+      steps = Math.min(config.maxInterpolationSteps, Math.max(2, Math.floor(distance / config.interpolationStep)));
 
       for (i = 1; i < steps; i += 1) {
         stroke.push({
@@ -803,8 +1148,8 @@
     stroke.push(point);
   }
 
-  function canvasPoint(event, inputType) {
-    var rect = noteCanvas.getBoundingClientRect();
+  function canvasPoint(surface, event, inputType) {
+    var rect = surface.canvas.getBoundingClientRect();
     var pressure = event.pressure && event.pressure > 0 ? event.pressure : 0.55;
 
     if (inputType === "touch") {
@@ -832,132 +1177,164 @@
     return [event];
   }
 
-  function addInputPoints(event, inputType) {
+  function addInputPoints(surface, event, inputType) {
     var events = getInputEvents(event);
     var i;
 
     for (i = 0; i < events.length; i += 1) {
-      appendStrokePoint(canvasPoint(events[i], inputType));
+      appendStrokePoint(surface, canvasPoint(surface, events[i], inputType));
     }
 
-    requestNotesRedraw();
+    drawActiveStrokeIncrementally(surface);
   }
 
-  function setInputStatus(inputType) {
+  function getSurfaceLabel(surface) {
+    var label = surface.canvas.parentNode && surface.canvas.parentNode.querySelector ? surface.canvas.parentNode.querySelector(".note-surface-label") : null;
+
+    return label ? label.textContent : surface.id;
+  }
+
+  function setInputStatus(surface, inputType) {
+    var prefix;
+
     if (!noteStatus) {
       return;
     }
 
+    prefix = getSurfaceLabel(surface);
+
     if (inputType === "pen") {
-      noteStatus.textContent = "Lapiz detectado";
+      noteStatus.textContent = prefix + " - Lapiz";
       return;
     }
 
     if (inputType === "touch") {
-      noteStatus.textContent = "Entrada tactil";
+      noteStatus.textContent = prefix + " - tactil";
       return;
     }
 
-    noteStatus.textContent = "Entrada " + inputType;
+    noteStatus.textContent = prefix + " - " + inputType;
   }
 
-  function startStroke(event, inputType) {
-    if (!noteCanvas) {
-      return;
-    }
-
-    notes.drawing = true;
-    notes.currentStroke = [];
-    notes.strokes.push(notes.currentStroke);
-    setInputStatus(inputType);
-    appendStrokePoint(canvasPoint(event, inputType));
-    requestNotesRedraw();
+  function startStroke(surface, event, inputType) {
+    surface.drawing = true;
+    surface.currentStroke = [];
+    resetActiveStrokeRendering(surface);
+    surface.strokes.push(surface.currentStroke);
+    setInputStatus(surface, inputType);
+    appendStrokePoint(surface, canvasPoint(surface, event, inputType));
+    drawActiveStrokeIncrementally(surface);
   }
 
-  function moveStroke(event, inputType) {
-    if (!notes.drawing || !notes.currentStroke) {
+  function moveStroke(surface, event, inputType) {
+    if (!surface.drawing || !surface.currentStroke) {
       return;
     }
 
-    addInputPoints(event, inputType);
+    addInputPoints(surface, event, inputType);
   }
 
-  function endStroke() {
-    if (!notes.drawing) {
+  function endStroke(surface) {
+    if (!surface.drawing) {
       return;
     }
 
-    notes.drawing = false;
-    notes.currentStroke = null;
-    requestNotesRedraw();
-    saveStrokes();
+    surface.drawing = false;
+    finishActiveStroke(surface);
+    surface.currentStroke = null;
+    saveStrokes(surface);
+  }
+
+  function endAllStrokes() {
+    forEachNoteSurface(endStroke);
   }
 
   function addPointerCanvasEvents() {
-    if (!noteCanvas) {
-      return;
-    }
+    forEachNoteSurface(addCanvasEvents);
+  }
+
+  function addCanvasEvents(surface) {
+    var canvas = surface.canvas;
 
     if (window.PointerEvent) {
-      noteCanvas.addEventListener("pointerdown", function (event) {
+      canvas.addEventListener("pointerdown", function (event) {
         event.preventDefault();
-        notes.activePointerId = event.pointerId;
+        surface.activePointerId = event.pointerId;
+        surface.rawPointerSeen = false;
 
-        if (noteCanvas.setPointerCapture) {
-          noteCanvas.setPointerCapture(event.pointerId);
+        if (canvas.setPointerCapture) {
+          canvas.setPointerCapture(event.pointerId);
         }
 
-        startStroke(event, event.pointerType || "pointer");
+        startStroke(surface, event, event.pointerType || "pointer");
       });
 
-      noteCanvas.addEventListener("pointermove", function (event) {
-        if (notes.activePointerId !== event.pointerId || !notes.drawing) {
+      canvas.addEventListener("pointerrawupdate", function (event) {
+        if (surface.activePointerId !== event.pointerId || !surface.drawing) {
+          return;
+        }
+
+        surface.rawPointerSeen = true;
+        event.preventDefault();
+        moveStroke(surface, event, event.pointerType || "pointer");
+      });
+
+      canvas.addEventListener("pointermove", function (event) {
+        if (surface.activePointerId !== event.pointerId || !surface.drawing) {
+          return;
+        }
+
+        if (surface.rawPointerSeen) {
           return;
         }
 
         event.preventDefault();
-        moveStroke(event, event.pointerType || "pointer");
+        moveStroke(surface, event, event.pointerType || "pointer");
       });
 
-      noteCanvas.addEventListener("pointerup", function (event) {
-        if (notes.activePointerId !== event.pointerId) {
+      canvas.addEventListener("pointerup", function (event) {
+        if (surface.activePointerId !== event.pointerId) {
           return;
         }
 
         event.preventDefault();
-        notes.activePointerId = null;
+        surface.activePointerId = null;
+        surface.rawPointerSeen = false;
 
-        if (noteCanvas.releasePointerCapture) {
+        if (canvas.releasePointerCapture) {
           try {
-            noteCanvas.releasePointerCapture(event.pointerId);
+            canvas.releasePointerCapture(event.pointerId);
           } catch (error) {
             // Some browsers release capture implicitly before pointerup.
           }
         }
 
-        endStroke();
+        endStroke(surface);
       });
 
-      noteCanvas.addEventListener("pointercancel", function () {
-        notes.activePointerId = null;
-        endStroke();
+      canvas.addEventListener("pointercancel", function () {
+        surface.activePointerId = null;
+        surface.rawPointerSeen = false;
+        endStroke(surface);
       });
       return;
     }
 
-    noteCanvas.addEventListener("mousedown", function (event) {
+    canvas.addEventListener("mousedown", function (event) {
       event.preventDefault();
-      startStroke(event, "mouse");
+      startStroke(surface, event, "mouse");
     });
 
-    noteCanvas.addEventListener("mousemove", function (event) {
+    canvas.addEventListener("mousemove", function (event) {
       event.preventDefault();
-      moveStroke(event, "mouse");
+      moveStroke(surface, event, "mouse");
     });
 
-    document.addEventListener("mouseup", endStroke);
+    document.addEventListener("mouseup", function () {
+      endStroke(surface);
+    });
 
-    noteCanvas.addEventListener("touchstart", function (event) {
+    canvas.addEventListener("touchstart", function (event) {
       var touch = event.touches && event.touches[0];
 
       if (!touch) {
@@ -965,10 +1342,10 @@
       }
 
       event.preventDefault();
-      startStroke(touch, "touch");
+      startStroke(surface, touch, "touch");
     });
 
-    noteCanvas.addEventListener("touchmove", function (event) {
+    canvas.addEventListener("touchmove", function (event) {
       var touch = event.touches && event.touches[0];
 
       if (!touch) {
@@ -976,11 +1353,15 @@
       }
 
       event.preventDefault();
-      moveStroke(touch, "touch");
+      moveStroke(surface, touch, "touch");
     });
 
-    noteCanvas.addEventListener("touchend", endStroke);
-    noteCanvas.addEventListener("touchcancel", endStroke);
+    canvas.addEventListener("touchend", function () {
+      endStroke(surface);
+    });
+    canvas.addEventListener("touchcancel", function () {
+      endStroke(surface);
+    });
   }
 
   if (prevLink) {
@@ -1005,26 +1386,51 @@
     });
   }
 
+  if (selectionClose) {
+    selectionClose.addEventListener("click", function () {
+      clearSelectionState();
+    });
+  }
+
   if (noteClose) {
     noteClose.addEventListener("click", closeNotes);
   }
 
   if (noteClear) {
     noteClear.addEventListener("click", function () {
-      notes.strokes = [];
-      saveStrokes();
-      redrawStrokes();
+      forEachNoteSurface(function (surface) {
+        surface.drawing = false;
+        surface.currentStroke = null;
+        surface.strokes = [];
+        saveStrokes(surface);
+        redrawStrokes(surface);
+      });
     });
   }
 
   document.addEventListener("click", handleReaderClick);
   document.addEventListener("selectionchange", scheduleSelectionPopover);
+  document.addEventListener("touchmove", preventSelectionNativeGesture, { passive: false });
   if (window.PointerEvent) {
+    document.addEventListener("pointerdown", startSelectionDrag);
+    document.addEventListener("pointermove", moveSelectionDrag);
+    document.addEventListener("pointerup", function () {
+      stopSelectionDrag();
+      scheduleSelectionPopover();
+    });
+    document.addEventListener("pointercancel", stopSelectionDrag);
     main.addEventListener("pointerdown", startLongPress);
     main.addEventListener("pointermove", moveLongPress);
     main.addEventListener("pointerup", cancelLongPress);
     main.addEventListener("pointercancel", cancelLongPress);
   } else {
+    document.addEventListener("touchstart", startSelectionDrag);
+    document.addEventListener("touchmove", moveSelectionDrag);
+    document.addEventListener("touchend", stopSelectionDrag);
+    document.addEventListener("touchcancel", stopSelectionDrag);
+    document.addEventListener("mousedown", startSelectionDrag);
+    document.addEventListener("mousemove", moveSelectionDrag);
+    document.addEventListener("mouseup", stopSelectionDrag);
     main.addEventListener("touchstart", startLongPress);
     main.addEventListener("touchmove", moveLongPress);
     main.addEventListener("touchend", cancelLongPress);
@@ -1046,9 +1452,14 @@
       setPage(state.page - 1, true);
     }
   });
-  document.addEventListener("pointerup", scheduleSelectionPopover);
   window.addEventListener("resize", scheduleLayout);
   window.addEventListener("popstate", function () {
+    if (state.selectionDrag || state.wordHighlight || state.notesOpen) {
+      restoreSelectionHistoryGuard();
+      return;
+    }
+
+    state.selectionHistoryGuard = false;
     setPage(getPageFromUrl(), false);
   });
 
